@@ -297,6 +297,39 @@
     .pill-btn {
       font-family: system-ui, -apple-system, 'Segoe UI', Arial, sans-serif !important;
     }
+
+    .file-change-item {
+      transition: border-color 0.2s ease;
+    }
+
+    .file-change-item:hover {
+      border-color: var(--vscode-focusBorder) !important;
+    }
+
+    .file-change-item .pill-btn {
+      font-size: 0.8em;
+      padding: 0.3em 0.8em;
+    }
+
+    .file-change-item .pill-btn:hover {
+      transform: translateY(-1px);
+    }
+
+    .notification {
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+      animation: slideIn 0.3s ease;
+    }
+
+    @keyframes slideIn {
+      from {
+        transform: translateX(100%);
+        opacity: 0;
+      }
+      to {
+        transform: translateX(0);
+        opacity: 1;
+      }
+    }
   </style>
 </head>
 
@@ -379,6 +412,7 @@
       if (isResponding) return; // Prevent sending if waiting for response
       const prompt = textarea.value;
       if (!prompt) { return; }
+      console.log('Sending chat with prompt:', prompt, 'and files:', selectedFiles);
       chatHistory.push({ role: 'user', content: prompt });
       renderChat();
       vscode.postMessage({ type: 'chat', prompt, files: selectedFiles });
@@ -508,6 +542,13 @@
 
     window.addEventListener('message', event => {
       const msg = event.data;
+      console.log('Received message:', msg.type, msg);
+      
+      if (msg.type === 'fileList') {
+        allFiles = msg.files || [];
+        console.log('Received file list:', allFiles.length, 'files');
+        console.log('Files:', allFiles);
+      }
       if (msg.type === 'filePicked') {
         if (msg.file && !selectedFiles.includes(msg.file)) {
           selectedFiles.push(msg.file);
@@ -516,6 +557,7 @@
       }
       // --- Copilot chat response handling ---
       if (msg.type === 'chatPartial') {
+        console.log('Received chatPartial:', msg.response);
         removeThinkingText();
         // Only update the last assistant message, do not push new ones
         if (chatHistory.length === 0 || chatHistory[chatHistory.length - 1].role !== 'assistant') {
@@ -526,6 +568,7 @@
         renderChat();
       }
       if (msg.type === 'chatResponse') {
+        console.log('Received chatResponse:', msg.response);
         removeThinkingText();
         // Finalize assistant message (update last one)
         if (chatHistory.length === 0 || chatHistory[chatHistory.length - 1].role !== 'assistant') {
@@ -542,8 +585,19 @@
         }
       }
       if (msg.type === 'chatStopped') {
+        console.log('Chat stopped');
         removeThinkingText();
         setResponding(false);
+      }
+      if (msg.type === 'fileChangesApplied') {
+        if (msg.success) {
+          showNotification(msg.message, 'success');
+        } else {
+          showNotification(msg.message, 'error');
+        }
+        // Clear suggestions after applying changes
+        suggestionsDiv.innerHTML = '';
+        suggestionsDiv.style.display = 'none';
       }
     });
 
@@ -588,11 +642,59 @@
         suggestionsDiv.innerHTML = '';
         return;
       }
+      
       suggestionsDiv.style.display = '';
-      suggestionsDiv.innerHTML = suggestions.map((s, i) => `<div class="suggestion">${s.desc}<span class="approve" onclick="window.approveSuggestion(${i})">[Approve]</span></div>`).join('');
-      window.approveSuggestion = (idx) => {
-        vscode.postMessage({ type: 'approveSuggestion', suggestion: suggestions[idx] });
-      };
+      
+      // Check if suggestions are file changes
+      const isFileChanges = suggestions.every(s => s.action && s.path);
+      
+      if (isFileChanges) {
+        // Render file changes with preview and apply buttons
+        let html = '<div style="margin-bottom: 1em;"><strong>Proposed File Changes:</strong></div>';
+        
+        suggestions.forEach((change, i) => {
+          const actionColor = change.action === 'create' ? '#4CAF50' : 
+                             change.action === 'edit' ? '#FF9800' : 
+                             change.action === 'delete' ? '#F44336' : '#2196F3';
+          
+          html += `
+            <div class="file-change-item" style="margin-bottom: 1em; border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 1em;">
+              <div style="display: flex; align-items: center; margin-bottom: 0.5em;">
+                <span style="background: ${actionColor}; color: white; padding: 0.2em 0.5em; border-radius: 3px; font-size: 0.8em; font-weight: bold; margin-right: 0.5em;">
+                  ${change.action.toUpperCase()}
+                </span>
+                <code style="font-size: 0.9em;">${getFileName(change.path)}</code>
+              </div>
+              ${change.reason ? `<div style="color: var(--vscode-descriptionForeground); font-size: 0.9em; margin-bottom: 0.5em;">${escapeHtml(change.reason)}</div>` : ''}
+              <div style="display: flex; gap: 0.5em;">
+                <button class="pill-btn" onclick="previewFileChange(${i})" style="font-size: 0.8em;">Preview</button>
+                <button class="pill-btn" onclick="applyFileChange(${i})" style="font-size: 0.8em; background: var(--vscode-button-background); color: var(--vscode-button-foreground);">Apply</button>
+              </div>
+            </div>
+          `;
+        });
+        
+        html += `
+          <div style="margin-top: 1em; display: flex; gap: 0.5em;">
+            <button class="pill-btn" onclick="previewAllFileChanges()" style="background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground);">Preview All</button>
+            <button class="pill-btn" onclick="applyAllFileChanges()" style="background: var(--vscode-button-background); color: var(--vscode-button-foreground);">Apply All</button>
+            <button class="pill-btn" onclick="dismissFileChanges()" style="background: var(--vscode-errorForeground); color: var(--vscode-button-foreground);">Dismiss</button>
+          </div>
+        `;
+        
+        suggestionsDiv.innerHTML = html;
+        
+        // Store suggestions globally for the onclick handlers
+        window.currentFileChanges = suggestions;
+      } else {
+        // Legacy suggestion rendering
+        suggestionsDiv.innerHTML = suggestions.map((s, i) => 
+          `<div class="suggestion">${escapeHtml(s.desc || String(s))}<span class="approve" onclick="window.approveSuggestion(${i})">[Approve]</span></div>`
+        ).join('');
+        window.approveSuggestion = (idx) => {
+          vscode.postMessage({ type: 'approveSuggestion', suggestion: suggestions[idx] });
+        };
+      }
     }
     window.applyInlineCode = (b64code) => {
       const code = atob(b64code);
@@ -605,6 +707,96 @@
       });
     }
 
+    // File change handling functions
+    function previewFileChange(index) {
+      if (window.currentFileChanges && window.currentFileChanges[index]) {
+        vscode.postMessage({ 
+          type: 'previewFileChanges', 
+          changes: [window.currentFileChanges[index]] 
+        });
+      }
+    }
+
+    function applyFileChange(index) {
+      if (window.currentFileChanges && window.currentFileChanges[index]) {
+        vscode.postMessage({ 
+          type: 'applyFileChanges', 
+          changes: [window.currentFileChanges[index]] 
+        });
+      }
+    }
+
+    function previewAllFileChanges() {
+      if (window.currentFileChanges) {
+        vscode.postMessage({ 
+          type: 'previewFileChanges', 
+          changes: window.currentFileChanges 
+        });
+      }
+    }
+
+    function applyAllFileChanges() {
+      if (window.currentFileChanges) {
+        vscode.postMessage({ 
+          type: 'applyFileChanges', 
+          changes: window.currentFileChanges 
+        });
+      }
+    }
+
+    function dismissFileChanges() {
+      suggestionsDiv.innerHTML = '';
+      suggestionsDiv.style.display = 'none';
+      window.currentFileChanges = null;
+    }
+
+    // Notification system
+    function showNotification(message, type = 'info') {
+      const notification = document.createElement('div');
+      notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 12px 16px;
+        border-radius: 6px;
+        font-weight: 500;
+        z-index: 1000;
+        max-width: 300px;
+        word-wrap: break-word;
+        transition: opacity 0.3s ease;
+      `;
+      
+      switch (type) {
+        case 'success':
+          notification.style.background = 'var(--vscode-inputValidation-infoBackground)';
+          notification.style.color = 'var(--vscode-inputValidation-infoForeground)';
+          notification.style.border = '1px solid var(--vscode-inputValidation-infoBorder)';
+          break;
+        case 'error':
+          notification.style.background = 'var(--vscode-inputValidation-errorBackground)';
+          notification.style.color = 'var(--vscode-inputValidation-errorForeground)';
+          notification.style.border = '1px solid var(--vscode-inputValidation-errorBorder)';
+          break;
+        default:
+          notification.style.background = 'var(--vscode-notifications-background)';
+          notification.style.color = 'var(--vscode-notifications-foreground)';
+          notification.style.border = '1px solid var(--vscode-notifications-border)';
+      }
+      
+      notification.textContent = message;
+      document.body.appendChild(notification);
+      
+      // Auto-remove after 5 seconds
+      setTimeout(() => {
+        notification.style.opacity = '0';
+        setTimeout(() => {
+          if (notification.parentNode) {
+            notification.parentNode.removeChild(notification);
+          }
+        }, 300);
+      }, 5000);
+    }
+
 
     // Sample suggestions fallback
     const sampleSuggestions = [
@@ -613,7 +805,12 @@
       'Explain the concept of closure in JavaScript.',
     ];
 
-    function showSuggestions(suggestions) {
+    function showSampleSuggestions(suggestions) {
+      const suggestionsContainer = document.getElementById('suggestions');
+      const inputField = document.getElementById('input');
+      
+      if (!suggestionsContainer || !inputField) return;
+      
       suggestionsContainer.innerHTML = '';
       suggestionsContainer.style.display = 'block';
       (suggestions || sampleSuggestions).forEach((suggestion) => {
@@ -625,14 +822,14 @@
         approveBtn.textContent = 'Approve';
         approveBtn.addEventListener('click', () => {
           inputField.value = typeof suggestion === 'string' ? suggestion : (suggestion.text || '');
-          handleSend();
+          sendBtnFixed.click();
         });
         div.appendChild(approveBtn);
         suggestionsContainer.appendChild(div);
       });
     }
     // Show sample suggestions for demonstration
-    setTimeout(() => showSuggestions(), 2000);
+    setTimeout(() => showSampleSuggestions(), 2000);
   </script>
 </body>
 

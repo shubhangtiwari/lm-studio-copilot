@@ -45,25 +45,37 @@ export function activate(context: vscode.ExtensionContext) {
 			switch (message.type) {
 				case 'chat': {
 					let contextFiles: { path: string, content: string }[] = [];
+					console.log('Chat message received with files:', message.files);
 					if (message.files && message.files.length) {
 						for (const file of message.files) {
 							try {
 								const uri = vscode.Uri.file(file);
 								const content = (await vscode.workspace.fs.readFile(uri)).toString();
 								contextFiles.push({ path: file, content });
-							} catch {}
+								console.log(`Added context file: ${file} (${content.length} characters)`);
+							} catch (error) {
+								console.error(`Failed to read file ${file}:`, error);
+							}
 						}
 					}
+					console.log(`Total context files: ${contextFiles.length}`);
 					chatHistory.push({ role: 'user', content: message.prompt });
 					// Only send the new chunk to the webview, not the accumulated text
 					const onPartial = (chunk: string) => {
+						console.log('Sending partial chunk:', chunk);
 						panel.webview.postMessage({ type: 'chatPartial', response: chunk });
 					};
 					// Create and store AbortController
 					currentAbortController = new AbortController();
-					const response = await chatWithLmStudio(message.prompt, contextFiles, chatHistory, onPartial, currentAbortController.signal);
-					chatHistory.push({ role: 'assistant', content: response.text });
-					panel.webview.postMessage({ type: 'chatResponse', response: response.text, suggestions: response.suggestions });
+					try {
+						const response = await chatWithLmStudio(message.prompt, contextFiles, chatHistory, onPartial, currentAbortController.signal);
+						console.log('Chat response received:', response.text);
+						chatHistory.push({ role: 'assistant', content: response.text });
+						panel.webview.postMessage({ type: 'chatResponse', response: response.text, suggestions: response.suggestions });
+					} catch (error: any) {
+						console.error('Error in chat:', error);
+						panel.webview.postMessage({ type: 'chatResponse', response: `Error: ${error?.message || String(error)}`, suggestions: [] });
+					}
 					currentAbortController = null;
 					break;
 				}
@@ -122,12 +134,6 @@ export function activate(context: vscode.ExtensionContext) {
 					}
 					break;
 				}
-				case 'listFiles': {
-					const files = await vscode.workspace.fs.readDirectory(vscode.Uri.parse(''));
-					const fileNames = files.map(([fileName, fileType]) => fileName);
-					panel.webview.postMessage({ type: 'fileList', files: fileNames });
-					break;
-				}
 				case 'approveSuggestion': {
 					// Handle suggestion approval
 					break;
@@ -142,6 +148,69 @@ export function activate(context: vscode.ExtensionContext) {
 							}
 						});
 						vscode.window.showInformationMessage('Code applied at cursor.');
+					}
+					break;
+				}
+				case 'applyFileChanges': {
+					try {
+						const workspaceEdit = new vscode.WorkspaceEdit();
+						
+						for (const change of message.changes) {
+							const uri = vscode.Uri.file(change.path);
+							
+							switch (change.action) {
+								case 'create':
+									workspaceEdit.createFile(uri, { 
+										contents: Buffer.from(change.content || ''),
+										ignoreIfExists: false 
+									});
+									break;
+								case 'edit':
+									// For edits, we need to replace the entire file content
+									const document = await vscode.workspace.openTextDocument(uri);
+									const fullRange = new vscode.Range(
+										document.positionAt(0),
+										document.positionAt(document.getText().length)
+									);
+									workspaceEdit.replace(uri, fullRange, change.content || '');
+									break;
+								case 'delete':
+									workspaceEdit.deleteFile(uri, { ignoreIfNotExists: true });
+									break;
+							}
+						}
+						
+						const success = await vscode.workspace.applyEdit(workspaceEdit);
+						if (success) {
+							panel.webview.postMessage({ 
+								type: 'fileChangesApplied', 
+								success: true,
+								message: `Successfully applied ${message.changes.length} file change(s)`
+							});
+						} else {
+							panel.webview.postMessage({ 
+								type: 'fileChangesApplied', 
+								success: false,
+								message: 'Failed to apply file changes'
+							});
+						}
+					} catch (error: any) {
+						panel.webview.postMessage({ 
+							type: 'fileChangesApplied', 
+							success: false,
+							message: `Error: ${error.message || String(error)}`
+						});
+					}
+					break;
+				}
+				case 'previewFileChanges': {
+					try {
+						// Show a diff view for each file change
+						for (const change of message.changes) {
+							await showFileChangeDiff(change, panel);
+						}
+					} catch (error: any) {
+						vscode.window.showErrorMessage(`Error previewing changes: ${error.message}`);
 					}
 					break;
 				}
@@ -194,13 +263,22 @@ function getWebviewContent(panel?: vscode.WebviewPanel): string {
 
 async function chatWithLmStudio(prompt: string, contextFiles: { path: string, content: string }[], chatHistory: { role: string, content: string }[], onPartial?: (chunk: string) => void, abortSignal?: AbortSignal): Promise<{ text: string, suggestions?: any[] }> {
   try {
-    const systemMsg = contextFiles && contextFiles.length ?
-      'Context files:\n' + contextFiles.map(f => `File: ${f.path}\n${f.content}`).join('\n\n') : '';
+    console.log('Attempting to connect to LM Studio at http://localhost:1234');
+    
+    // Build the user prompt with context files
+    let userPrompt = '';
+    if (contextFiles && contextFiles.length) {
+      userPrompt += 'Context files:\n' + contextFiles.map(f => `File: ${f.path}\n${f.content}`).join('\n\n') + '\n\n';
+      console.log(`Added ${contextFiles.length} context files to user prompt`);
+    }
+    userPrompt += prompt;
+
     const messages = [
-      ...(systemMsg ? [{ role: 'system', content: systemMsg }] : []),
       ...chatHistory,
-      { role: 'user', content: prompt }
+      { role: 'user', content: userPrompt }
     ];
+    
+    console.log('Sending request to LM Studio with', messages.length, 'messages');
     const res = await fetch('http://localhost:1234/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -211,6 +289,12 @@ async function chatWithLmStudio(prompt: string, contextFiles: { path: string, co
       }),
       signal: abortSignal
     });
+    
+    if (!res.ok) {
+      throw new Error(`LM Studio server responded with status ${res.status}: ${res.statusText}. Make sure LM Studio is running on localhost:1234`);
+    }
+    
+    console.log('Successfully connected to LM Studio, processing response...');
     let text = '';
     let suggestions = undefined;
     const reader = res.body?.getReader();
@@ -263,6 +347,21 @@ async function chatWithLmStudio(prompt: string, contextFiles: { path: string, co
     } else {
       text = await res.text();
     }
+    
+    // Parse file changes from the response
+    try {
+      const fileChangesMatch = text.match(/```filechanges\s*([\s\S]*?)\s*```/);
+      if (fileChangesMatch) {
+        const fileChanges = JSON.parse(fileChangesMatch[1]);
+        // Remove the filechanges block from the displayed text
+        text = text.replace(fileChangesMatch[0], '').trim();
+        return { text, suggestions: fileChanges };
+      }
+    } catch (e) {
+      console.error('Error parsing file changes:', e);
+    }
+    
+    // Legacy suggestion parsing (keep for backward compatibility)
     try {
       const match = text.match(/```suggestion([\s\S]*?)```/);
       if (match) {
@@ -272,10 +371,17 @@ async function chatWithLmStudio(prompt: string, contextFiles: { path: string, co
     } catch {}
     return { text, suggestions };
   } catch (e: any) {
+    console.error('Error in chatWithLmStudio:', e);
     // If aborted, just return what we have so far (no error)
     if (abortSignal && abortSignal.aborted) {
       return { text: '', suggestions: undefined };
     }
+    
+    // Check for common connection errors
+    if (e.code === 'ECONNREFUSED' || e.message?.includes('fetch')) {
+      return { text: 'Error: Cannot connect to LM Studio. Please make sure LM Studio is running on localhost:1234 and you have a model loaded.' };
+    }
+    
     return { text: 'Error: ' + (e?.message || String(e)) };
   }
 }
@@ -313,6 +419,50 @@ async function handleFileSuggestion(s: any, panel: vscode.WebviewPanel) {
 		if (confirm === 'Yes') {
 			await vscode.workspace.fs.writeFile(uri, Buffer.from(s.content));
 			panel.webview.postMessage({ type: s.action === 'edit' ? 'fileWritten' : 'fileCreated', path: s.path });
+		}
+	}
+}
+
+// Helper for showing file change diffs
+async function showFileChangeDiff(change: any, panel: vscode.WebviewPanel) {
+	const uri = vscode.Uri.file(change.path);
+	let oldContent = '';
+	
+	try {
+		oldContent = (await vscode.workspace.fs.readFile(uri)).toString();
+	} catch {
+		// File doesn't exist, that's okay for create operations
+	}
+	
+	const diffTitle = change.action === 'create' ? `Create: ${change.path}` : `Edit: ${change.path}`;
+	const leftUri = vscode.Uri.parse(`untitled:${change.action === 'create' ? 'New File' : 'Current'} - ${path.basename(change.path)}`);
+	const rightUri = vscode.Uri.parse(`untitled:Proposed - ${path.basename(change.path)}`);
+	
+	// Create temporary documents
+	const leftDoc = await vscode.workspace.openTextDocument(leftUri);
+	const rightDoc = await vscode.workspace.openTextDocument(rightUri);
+	
+	// Show documents
+	await vscode.window.showTextDocument(leftDoc, { preview: false, preserveFocus: true });
+	await vscode.window.showTextDocument(rightDoc, { preview: false, preserveFocus: true });
+	
+	// Open diff view
+	await vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, diffTitle);
+	
+	// Populate the documents with content
+	const editors = vscode.window.visibleTextEditors;
+	for (const editor of editors) {
+		if (editor.document.uri.toString() === leftUri.toString()) {
+			await editor.edit(editBuilder => {
+				const fullRange = new vscode.Range(0, 0, editor.document.lineCount, 0);
+				editBuilder.replace(fullRange, oldContent);
+			});
+		}
+		if (editor.document.uri.toString() === rightUri.toString()) {
+			await editor.edit(editBuilder => {
+				const fullRange = new vscode.Range(0, 0, editor.document.lineCount, 0);
+				editBuilder.replace(fullRange, change.content);
+			});
 		}
 	}
 }
