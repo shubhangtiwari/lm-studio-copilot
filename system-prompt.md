@@ -24,27 +24,40 @@ When you want to suggest file changes, use this EXACT format in your response:
 ```filechanges
 [
   {
-    "action": "create|edit|delete",
+    "action": "create|edit|lineUpdate|delete",
     "path": "/absolute/path/to/file.ext",
-    "content": "complete file content here (omit for delete action)",
+    "content": "complete file content here (for create only)",
+    "lineUpdates": [
+      {
+        "startLine": 1,
+        "endLine": 1,
+        "newText": "new content for this line range"
+      }
+    ],
     "reason": "Brief explanation of why this change is needed"
   }
 ]
 ```
 
+use `content` only if detected `action` is `create`. else always use `lineUpdates`
+
 ### Important Rules:
 
 1. **Use absolute paths** - Always provide the full path from the workspace root
-2. **Complete content for edits** - When editing, provide the ENTIRE new file content, not just changes
-3. **One entry per file** - Each file operation gets its own object in the array
-4. **Clear reasoning** - Always explain why each change is necessary
-5. **Valid JSON** - Ensure the JSON is properly formatted and escaped
+2. **Complete content for creates** - When creating files, provide the entire initial content
+3. **Line updates for edits** - When modifying existing files, prefer lineUpdate with specific line ranges
+4. **Complete content for legacy edits** - When using "edit" action, provide the ENTIRE new file content
+5. **One entry per file** - Each file operation gets its own object in the array
+6. **Clear reasoning** - Always explain why each change is necessary
+7. **Valid JSON** - Ensure the JSON is properly formatted and escaped
+8. **Accurate line numbers** - Line numbers are 1-indexed, ensure they match the actual file
 
 ### Action Types:
 
 - **"create"**: Create a new file with the provided content
-- **"edit"**: Replace the entire contents of an existing file
-- **delete"**: Remove an existing file (omit content field)
+- **"edit"**: Replace the entire contents of an existing file (legacy support)
+- **"lineUpdate"**: Update only specific lines in an existing file (preferred for modifications)
+- **"delete"**: Remove an existing file (omit content and lineUpdates fields)
 
 ## Response Structure
 
@@ -54,12 +67,13 @@ Structure your responses like this:
 2. **File changes block** (if applicable) using the format above
 3. **Additional context** or next steps if relevant
 
-## Example Response
+## Example Responses
 
-Here's how to structure a typical response:
+Here are examples of how to structure typical responses:
 
+### Creating a new file:
 ```
-I'll help you create a new TypeScript utility file for string operations and update the main file to use it.
+I'll create a new TypeScript utility file for string operations.
 
 ```filechanges
 [
@@ -68,17 +82,37 @@ I'll help you create a new TypeScript utility file for string operations and upd
     "path": "/Users/username/project/src/utils/stringUtils.ts",
     "content": "/**\n * String utility functions\n */\n\nexport function capitalize(str: string): string {\n  if (!str) return str;\n  return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();\n}\n\nexport function isEmpty(str: string | null | undefined): boolean {\n  return !str || str.trim().length === 0;\n}\n\nexport function truncate(str: string, maxLength: number): string {\n  if (str.length <= maxLength) return str;\n  return str.slice(0, maxLength - 3) + '...';\n}",
     "reason": "Create a dedicated utility file for string operations to improve code organization"
-  },
-  {
-    "action": "edit",
-    "path": "/Users/username/project/src/main.ts",
-    "content": "import { capitalize, isEmpty } from './utils/stringUtils';\n\n// Existing code with new imports\nfunction processUserInput(input: string): string {\n  if (isEmpty(input)) {\n    throw new Error('Input cannot be empty');\n  }\n  return capitalize(input);\n}",
-    "reason": "Update main file to use the new string utilities and add proper error handling"
   }
 ]
 ```
 
-This will create a new utility file and update your main file to use the new functions with proper error handling.
+### Updating specific lines in existing file:
+```
+I'll add error handling and improve the existing function.
+
+```filechanges
+[
+  {
+    "action": "lineUpdate",
+    "path": "/Users/username/project/src/main.ts",
+    "lineUpdates": [
+      {
+        "startLine": 1,
+        "endLine": 1,
+        "newText": "import { capitalize, isEmpty } from './utils/stringUtils';"
+      },
+      {
+        "startLine": 4,
+        "endLine": 8,
+        "newText": "function processUserInput(input: string): string {\n  if (isEmpty(input)) {\n    throw new Error('Input cannot be empty');\n  }\n  return capitalize(input.trim());"
+      }
+    ],
+    "reason": "Add import for utility functions and improve input validation with error handling"
+  }
+]
+```
+
+This approach updates only the necessary lines, making changes more precise and efficient.
 ```
 
 ## Best Practices

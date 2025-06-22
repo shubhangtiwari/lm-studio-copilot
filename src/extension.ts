@@ -4,6 +4,21 @@ import * as vscode from 'vscode';
 const path = require('path');
 const fs = require('fs');
 
+// Type definitions for file changes
+interface LineUpdate {
+	startLine: number;
+	endLine: number;
+	newText: string;
+}
+
+interface FileChange {
+	action: 'create' | 'edit' | 'lineUpdate' | 'delete';
+	path: string;
+	content?: string;
+	lineUpdates?: LineUpdate[];
+	reason: string;
+}
+
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
@@ -60,7 +75,6 @@ export function activate(context: vscode.ExtensionContext) {
 					}
 					console.log(`Total context files: ${contextFiles.length}`);
 					chatHistory.push({ role: 'user', content: message.prompt });
-					// Only send the new chunk to the webview, not the accumulated text
 					const onPartial = (chunk: string) => {
 						console.log('Sending partial chunk:', chunk);
 						panel.webview.postMessage({ type: 'chatPartial', response: chunk });
@@ -173,6 +187,35 @@ export function activate(context: vscode.ExtensionContext) {
 										document.positionAt(document.getText().length)
 									);
 									workspaceEdit.replace(uri, fullRange, change.content || '');
+									break;
+								case 'lineUpdate':
+									// Handle line-based updates
+									const doc = await vscode.workspace.openTextDocument(uri);
+									if (change.lineUpdates && Array.isArray(change.lineUpdates)) {
+										// Sort line updates by start line in descending order to avoid offset issues
+										const sortedUpdates = [...change.lineUpdates].sort((a, b) => b.startLine - a.startLine);
+										
+										for (const update of sortedUpdates) {
+											const startLine = Math.max(0, update.startLine - 1); // Convert to 0-indexed
+											const endLine = Math.max(0, update.endLine - 1); // Convert to 0-indexed
+											
+											// Validate line numbers
+											if (startLine >= doc.lineCount) {
+												console.warn(`Start line ${update.startLine} exceeds document length ${doc.lineCount}`);
+												continue;
+											}
+											
+											const startPos = new vscode.Position(startLine, 0);
+											const endPos = endLine >= doc.lineCount - 1 
+												? new vscode.Position(doc.lineCount - 1, doc.lineAt(doc.lineCount - 1).text.length)
+												: new vscode.Position(endLine + 1, 0); // Include the entire end line + newline
+											
+											const range = new vscode.Range(startPos, endPos);
+											const newText = update.newText + (endLine < doc.lineCount - 1 ? '\n' : '');
+											
+											workspaceEdit.replace(uri, range, newText);
+										}
+									}
 									break;
 								case 'delete':
 									workspaceEdit.deleteFile(uri, { ignoreIfNotExists: true });
@@ -424,7 +467,7 @@ async function handleFileSuggestion(s: any, panel: vscode.WebviewPanel) {
 }
 
 // Helper for showing file change diffs
-async function showFileChangeDiff(change: any, panel: vscode.WebviewPanel) {
+async function showFileChangeDiff(change: FileChange, panel: vscode.WebviewPanel) {
 	const uri = vscode.Uri.file(change.path);
 	let oldContent = '';
 	
@@ -434,7 +477,23 @@ async function showFileChangeDiff(change: any, panel: vscode.WebviewPanel) {
 		// File doesn't exist, that's okay for create operations
 	}
 	
-	const diffTitle = change.action === 'create' ? `Create: ${change.path}` : `Edit: ${change.path}`;
+	let newContent = '';
+	let diffTitle = '';
+	
+	if (change.action === 'create') {
+		newContent = change.content || '';
+		diffTitle = `Create: ${change.path}`;
+	} else if (change.action === 'edit') {
+		newContent = change.content || '';
+		diffTitle = `Edit: ${change.path}`;
+	} else if (change.action === 'lineUpdate') {
+		// For line updates, generate the new content by applying line changes
+		newContent = applyLineUpdates(oldContent, change.lineUpdates || []);
+		diffTitle = `Line Update: ${change.path}`;
+	} else {
+		return; // Skip unsupported actions
+	}
+	
 	const leftUri = vscode.Uri.parse(`untitled:${change.action === 'create' ? 'New File' : 'Current'} - ${path.basename(change.path)}`);
 	const rightUri = vscode.Uri.parse(`untitled:Proposed - ${path.basename(change.path)}`);
 	
@@ -461,8 +520,33 @@ async function showFileChangeDiff(change: any, panel: vscode.WebviewPanel) {
 		if (editor.document.uri.toString() === rightUri.toString()) {
 			await editor.edit(editBuilder => {
 				const fullRange = new vscode.Range(0, 0, editor.document.lineCount, 0);
-				editBuilder.replace(fullRange, change.content);
+				editBuilder.replace(fullRange, newContent);
 			});
 		}
 	}
+}
+
+// Helper function to apply line updates to content
+function applyLineUpdates(originalContent: string, lineUpdates: LineUpdate[]): string {
+	const lines = originalContent.split('\n');
+	
+	// Sort line updates by start line in descending order to avoid offset issues
+	const sortedUpdates = [...lineUpdates].sort((a, b) => b.startLine - a.startLine);
+	
+	for (const update of sortedUpdates) {
+		const startIndex = Math.max(0, update.startLine - 1); // Convert to 0-indexed
+		const endIndex = Math.max(0, update.endLine - 1); // Convert to 0-indexed
+		
+		// Validate line numbers
+		if (startIndex >= lines.length) {
+			console.warn(`Start line ${update.startLine} exceeds content length ${lines.length}`);
+			continue;
+		}
+		
+		// Replace the lines
+		const newLines = update.newText.split('\n');
+		lines.splice(startIndex, (endIndex - startIndex + 1), ...newLines);
+	}
+	
+	return lines.join('\n');
 }

@@ -655,17 +655,28 @@
         suggestions.forEach((change, i) => {
           const actionColor = change.action === 'create' ? '#4CAF50' : 
                              change.action === 'edit' ? '#FF9800' : 
-                             change.action === 'delete' ? '#F44336' : '#2196F3';
+                             change.action === 'lineUpdate' ? '#2196F3' :
+                             change.action === 'delete' ? '#F44336' : '#9E9E9E';
+          
+          let actionLabel = change.action.toUpperCase();
+          let actionDescription = '';
+          
+          if (change.action === 'lineUpdate' && change.lineUpdates) {
+            const updateCount = change.lineUpdates.length;
+            actionDescription = `${updateCount} line update${updateCount > 1 ? 's' : ''}`;
+          }
           
           html += `
             <div class="file-change-item" style="margin-bottom: 1em; border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 1em;">
               <div style="display: flex; align-items: center; margin-bottom: 0.5em;">
                 <span style="background: ${actionColor}; color: white; padding: 0.2em 0.5em; border-radius: 3px; font-size: 0.8em; font-weight: bold; margin-right: 0.5em;">
-                  ${change.action.toUpperCase()}
+                  ${actionLabel}
                 </span>
                 <code style="font-size: 0.9em;">${getFileName(change.path)}</code>
+                ${actionDescription ? `<span style="color: var(--vscode-descriptionForeground); font-size: 0.8em; margin-left: 0.5em;">(${actionDescription})</span>` : ''}
               </div>
               ${change.reason ? `<div style="color: var(--vscode-descriptionForeground); font-size: 0.9em; margin-bottom: 0.5em;">${escapeHtml(change.reason)}</div>` : ''}
+              ${change.action === 'lineUpdate' && change.lineUpdates ? renderLineUpdateDetails(change.lineUpdates) : ''}
               <div style="display: flex; gap: 0.5em;">
                 <button class="pill-btn" onclick="previewFileChange(${i})" style="font-size: 0.8em;">Preview</button>
                 <button class="pill-btn" onclick="applyFileChange(${i})" style="font-size: 0.8em; background: var(--vscode-button-background); color: var(--vscode-button-foreground);">Apply</button>
@@ -695,6 +706,24 @@
           vscode.postMessage({ type: 'approveSuggestion', suggestion: suggestions[idx] });
         };
       }
+    }
+    
+    // Helper function to render line update details
+    function renderLineUpdateDetails(lineUpdates) {
+      if (!lineUpdates || !lineUpdates.length) return '';
+      
+      let html = '<div style="margin: 0.5em 0; padding: 0.5em; background: var(--vscode-input-background); border-radius: 3px; font-size: 0.8em;">';
+      html += '<div style="font-weight: bold; margin-bottom: 0.3em;">Line Changes:</div>';
+      
+      lineUpdates.forEach((update, i) => {
+        const lineRange = update.startLine === update.endLine 
+          ? `Line ${update.startLine}` 
+          : `Lines ${update.startLine}-${update.endLine}`;
+        html += `<div style="margin-bottom: 0.2em;">• ${lineRange}: <code style="font-size: 0.9em;">${escapeHtml(update.newText.substring(0, 50))}${update.newText.length > 50 ? '...' : ''}</code></div>`;
+      });
+      
+      html += '</div>';
+      return html;
     }
     window.applyInlineCode = (b64code) => {
       const code = atob(b64code);
