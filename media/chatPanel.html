@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LM Studio Copilot Chat</title>
+  <style>
+    body {
+      display: block;
+      min-height: 100vh;
+      background: var(--vscode-editor-background);
+      color: var(--vscode-editor-foreground);
+      margin: 0;
+      padding: 0;
+    }
+
+    #container {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+      height: 100vh;
+      width: 100vw;
+      max-width: 100vw;
+      margin: 0;
+      background: var(--vscode-editor-background);
+      border-radius: 4px;
+      box-shadow: 0 2px 8px var(--vscode-widget-shadow);
+      padding: 0.5em;
+      box-sizing: border-box;
+    }
+
+    #chat {
+      flex: 1;
+      min-height: 0;
+      height: auto;
+      overflow-y: auto;
+      border-bottom: 1px solid var(--vscode-panel-border);
+      padding: 1em 0;
+      background: var(--vscode-editor-background);
+    }
+
+    .msg {
+      margin-bottom: 1.2em;
+    }
+
+    .msg.user {
+      text-align: right;
+    }
+
+    .msg .bubble {
+      display: inline-block;
+      padding: 0.7em 1.2em;
+      border-radius: 0.6em;
+      max-width: 70%;
+    }
+
+    .msg.user .bubble {
+      background: var(--vscode-inputOption-activeBackground);
+      color: var(--vscode-inputOption-activeForeground);
+      border: 1px solid var(--vscode-inputOption-activeBorder);
+    }
+
+    .msg.assistant .bubble {
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-input-border);
+    }
+
+    #inputRow {
+      display: flex;
+      gap: 0.5em;
+      margin-top: 1em;
+    }
+
+    #input {
+      flex: 1;
+      padding: 0.7em;
+      border-radius: 0.5em;
+      border: 1px solid var(--vscode-input-border);
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      font-size: 1em;
+    }
+
+    #input::placeholder {
+      color: var(--vscode-input-placeholderForeground);
+    }
+
+    #send {
+      padding: 0.7em 1.5em;
+      border-radius: 4px;
+      border: none;
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      font-weight: bold;
+      cursor: pointer;
+      display: inline-block;
+      width: 44px;
+      height: 44px;
+      padding: 0;
+      border-radius: 8px;
+      border: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #send:hover {
+      background: var(--vscode-button-hoverBackground);
+    }
+
+    #send:disabled {
+      background: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
+      cursor: not-allowed;
+    }
+
+    #fileSelector {
+      display: flex;
+      gap: 1em;
+      margin: 1em 0;
+    }
+
+    .token-pile {
+      flex: 1;
+      min-height: 40px;
+      background: var(--vscode-input-background);
+      border-radius: 0.25em;
+      padding: 0.5em;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5em;
+      border: 1px solid var(--vscode-input-border);
+    }
+
+    .file-token,
+    .file-token.selected {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--vscode-inputOption-activeBackground);
+      color: var(--vscode-inputOption-activeForeground);
+      border-radius: 0.5em;
+      padding: 0.3em 1em;
+      cursor: pointer;
+      font-size: 0.95em;
+      transition: background 0.2s, color 0.2s;
+      position: relative;
+      max-height: 2em;
+      line-height: 1.5em;
+      box-sizing: border-box;
+      overflow: hidden;
+      white-space: nowrap;
+      width: auto;
+      max-width: 100%;
+      border: 1px solid var(--vscode-inputOption-activeBorder);
+    }
+
+    .file-token.selected {
+      background: var(--vscode-list-activeSelectionBackground);
+      color: var(--vscode-list-activeSelectionForeground);
+    }
+
+    .file-token:hover {
+      background: var(--vscode-list-hoverBackground);
+      color: var(--vscode-list-hoverForeground);
+    }
+
+    .token-pile-title {
+      font-size: 0.9em;
+      color: var(--vscode-descriptionForeground);
+      margin-bottom: 0.2em;
+    }
+
+    #suggestions {
+      background: var(--vscode-notifications-background);
+      border: 1px solid var(--vscode-notifications-border);
+      margin-top: 1em;
+      padding: 1em;
+      border-radius: 0.25em;
+      display: none;
+    }
+
+    .suggestion {
+      margin-bottom: 1em;
+      color: var(--vscode-foreground);
+    }
+
+    .approve {
+      color: var(--vscode-textLink-foreground);
+      cursor: pointer;
+      margin-left: 1em;
+      font-weight: bold;
+    }
+
+    .approve:hover {
+      color: var(--vscode-textLink-activeForeground);
+    }
+
+    .inline-action {
+      color: var(--vscode-textLink-foreground);
+      cursor: pointer;
+      margin-left: 1em;
+      font-weight: bold;
+    }
+
+    .inline-action:hover {
+      color: var(--vscode-textLink-activeForeground);
+    }
+
+    pre {
+      background: var(--vscode-textCodeBlock-background);
+      border-radius: 0.25em;
+      padding: 0.7em;
+      overflow-x: auto;
+      color: var(--vscode-editor-foreground);
+    }
+
+    .spinner-copilot {
+      display: inline-block;
+      width: 18px;
+      height: 18px;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+
+    .spinner-copilot:after {
+      content: ' ';
+      display: block;
+      width: 14px;
+      height: 14px;
+      margin: 2px;
+      border-radius: 50%;
+      border: 2px solid var(--vscode-progressBar-background);
+      border-color: var(--vscode-progressBar-background) transparent var(--vscode-progressBar-background) transparent;
+      animation: spinner-copilot-spin 1s linear infinite;
+    }
+
+    @keyframes spinner-copilot-spin {
+      0% {
+        transform: rotate(0deg);
+      }
+
+      100% {
+        transform: rotate(360deg);
+      }
+    }
+
+    .pill-btn {
+      background: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
+      border: 1px solid var(--vscode-button-border);
+      border-radius: 6px;
+      padding: 0.4em 1.2em;
+      font-size: 1em;
+      font-weight: bold;
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s, border 0.2s;
+      outline: none;
+    }
+
+    .pill-btn:hover {
+      background: var(--vscode-button-secondaryHoverBackground);
+    }
+
+    .file-pill {
+      display: inline-flex;
+      align-items: center;
+      background: var(--vscode-inputOption-activeBackground);
+      color: var(--vscode-inputOption-activeForeground);
+      border-radius: 6px;
+      padding: 0.4em 1.2em;
+      font-size: 1em;
+      margin-right: 0.2em;
+      font-weight: 500;
+      border: 1px solid var(--vscode-inputOption-activeBorder);
+      margin-left: 0;
+      margin-top: 0.5em;
+    }
+
+    .file-pill:hover {
+      background: var(--vscode-list-hoverBackground);
+      color: var(--vscode-list-hoverForeground);
+    }
+
+    body,
+    input,
+    textarea,
+    button,
+    select,
+    .msg .bubble,
+    .file-token,
+    .file-token.selected,
+    .file-pill,
+    .pill-btn {
+      font-family: system-ui, -apple-system, 'Segoe UI', Arial, sans-serif !important;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="container">
+    <div id="chat"></div>
+    <div id="inputRow">
+      <textarea id="input" placeholder="Ask something..."></textarea>
+      <button id="send" aria-label="Send" style="display:inline-block;width:33px;height:33px;padding:0;border-radius:8px;background:var(--vscode-button-background);border:none;display:flex;align-items:center;justify-content:center;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--vscode-button-foreground)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+      </button>
+    </div>
+    <div id="suggestions"></div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script>
+    const vscode = acquireVsCodeApi();
+    const chat = document.getElementById('chat');
+    const input = document.getElementById('input');
+    const suggestionsDiv = document.getElementById('suggestions');
+    let chatHistory = [];
+    let allFiles = [];
+    let selectedFiles = [];
+    let isResponding = false;
+    let thinkingInterval = null;
+    let thinkingDots = 1;
+    let thinkingActive = false;
+    vscode.postMessage({ type: 'listFiles' });
+    // Create Stop button
+    const sendBtn = document.getElementById('send');
+    const stopBtn = document.createElement('button');
+    stopBtn.id = 'stop';
+    stopBtn.setAttribute('aria-label', 'Stop');
+    stopBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>`;
+    stopBtn.style.display = 'none';
+    stopBtn.style.width = '33px';
+    stopBtn.style.height = '33px';
+    stopBtn.style.padding = '0';
+    stopBtn.style.borderRadius = '50%';
+    stopBtn.style.background = 'var(--vscode-errorForeground)';
+    stopBtn.style.border = 'none';
+    stopBtn.style.color = 'var(--vscode-button-foreground)';
+    stopBtn.style.fontWeight = 'bold';
+    stopBtn.style.cursor = 'pointer';
+    stopBtn.style.display = 'none';
+    stopBtn.style.alignItems = 'center';
+    stopBtn.style.justifyContent = 'center';
+    stopBtn.style.display = 'none';
+    stopBtn.onclick = () => {
+      vscode.postMessage({ type: 'stop' });
+      stopBtn.disabled = true;
+    };
+    sendBtn.parentNode.appendChild(stopBtn);
+
+    // Replace input with textarea
+    const inputRow = document.getElementById('inputRow');
+    const oldInput = document.getElementById('input');
+    const textarea = document.createElement('textarea');
+    textarea.id = 'input';
+    textarea.placeholder = 'Ask something...';
+    textarea.style.flex = '1';
+    textarea.style.padding = oldInput.style.padding;
+    textarea.style.borderRadius = oldInput.style.borderRadius;
+    textarea.style.border = oldInput.style.border;
+    textarea.style.fontSize = oldInput.style.fontSize;
+    textarea.rows = 1;
+    inputRow.replaceChild(textarea, oldInput);
+
+    // Fix: update sendBtn reference after replacing input
+    const sendBtnFixed = document.getElementById('send');
+
+    textarea.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendBtnFixed.click();
+      }
+    });
+
+    sendBtnFixed.onclick = () => {
+      if (isResponding) return; // Prevent sending if waiting for response
+      const prompt = textarea.value;
+      if (!prompt) { return; }
+      chatHistory.push({ role: 'user', content: prompt });
+      renderChat();
+      vscode.postMessage({ type: 'chat', prompt, files: selectedFiles });
+      textarea.value = '';
+      setResponding(true);
+      // Show Copilot thinking text below Copilot bubble
+      if (thinkingInterval) clearInterval(thinkingInterval);
+      thinkingDots = 1;
+      thinkingActive = true;
+      showThinkingText(); // Show thinking text immediately
+      thinkingInterval = setInterval(() => {
+        thinkingDots = thinkingDots % 4 + 1;
+        updateThinkingText();
+      }, 500);
+    };
+
+    function showThinkingText() {
+      // This function is now handled directly in renderChat()
+      // Just ensure thinkingActive is true and call renderChat
+      if (thinkingActive) {
+        renderChat();
+      }
+    }
+    function updateThinkingText() {
+      const textSpan = document.getElementById('thinking-text');
+      if (textSpan) {
+        textSpan.textContent = 'Thinking' + '.'.repeat(thinkingDots);
+      }
+    }
+
+    function setResponding(responding) {
+      isResponding = responding;
+      sendBtnFixed.disabled = responding; // Disable send button while waiting
+      sendBtnFixed.style.display = responding ? 'none' : 'inline-block';
+      stopBtn.style.display = responding ? 'inline-block' : 'none';
+      stopBtn.disabled = false;
+    }
+    function removeThinkingText() {
+      thinkingActive = false;
+      if (thinkingInterval) {
+        clearInterval(thinkingInterval);
+        thinkingInterval = null;
+      }
+      const thinkingDiv = document.getElementById('copilot-thinking');
+      if (thinkingDiv && thinkingDiv.parentNode) {
+        thinkingDiv.parentNode.removeChild(thinkingDiv);
+      }
+    }
+
+    // Helper to get just the filename from a path
+    function getFileName(path) {
+      if (!path) { return ''; }
+      return path.split(/[\\/]/).pop();
+    }
+
+    // --- UI: Add New Chat button and Add Context button ---
+    let contextRow = document.getElementById('contextRow');
+    if (!contextRow) {
+      contextRow = document.createElement('div');
+      contextRow.id = 'contextRow';
+      contextRow.style.display = 'flex';
+      contextRow.style.gap = '0.5em';
+      contextRow.style.margin = '1em 0 0 0';
+      contextRow.style.alignItems = 'center';
+      contextRow.style.flexWrap = 'wrap';
+      // Insert contextRow below inputRow (message box)
+      const inputRowDiv = document.getElementById('inputRow');
+      inputRowDiv.parentNode.insertBefore(contextRow, inputRowDiv.nextSibling);
+    }
+    // --- New Chat button ---
+    let newChatBtn = document.getElementById('newChatBtn');
+    if (!newChatBtn) {
+      newChatBtn = document.createElement('button');
+      newChatBtn.id = 'newChatBtn';
+      newChatBtn.textContent = 'New Chat';
+      newChatBtn.className = 'pill-btn';
+      newChatBtn.onclick = () => {
+        chatHistory = [];
+        selectedFiles = [];
+        suggestionsDiv.innerHTML = '';
+        renderChat();
+        renderSelectedFilePills();
+      };
+      contextRow.appendChild(newChatBtn);
+    }
+    // --- Add Context button ---
+    let addContextBtn = document.getElementById('addContextBtn');
+    if (!addContextBtn) {
+      addContextBtn = document.createElement('button');
+      addContextBtn.id = 'addContextBtn';
+      addContextBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:0.5em;"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>Add Context`;
+      addContextBtn.className = 'pill-btn';
+      addContextBtn.onclick = () => {
+        vscode.postMessage({ type: 'showFilePicker' });
+      };
+      contextRow.appendChild(addContextBtn);
+    }
+    // Pills for selected files
+    function renderSelectedFilePills() {
+      // Remove old pills (except the New Chat and Add Context buttons)
+      while (contextRow.children.length > 2) { contextRow.removeChild(contextRow.lastChild); }
+      selectedFiles.forEach(f => {
+        const pill = document.createElement('span');
+        pill.className = 'file-pill';
+        pill.title = f;
+        pill.textContent = getFileName(f);
+        // Add remove (x) button
+        const x = document.createElement('span');
+        x.textContent = ' ×';
+        x.style.cursor = 'pointer';
+        x.style.marginLeft = '0.5em';
+        x.onclick = () => {
+          selectedFiles = selectedFiles.filter(x => x !== f);
+          renderSelectedFilePills();
+        };
+        pill.appendChild(x);
+        contextRow.appendChild(pill);
+      });
+    }
+    // Initial render
+    renderSelectedFilePills();
+
+    // Add a markdown parser (marked.js via CDN)
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/marked/marked.min.js';
+    document.head.appendChild(script);
+
+    window.addEventListener('message', event => {
+      const msg = event.data;
+      if (msg.type === 'filePicked') {
+        if (msg.file && !selectedFiles.includes(msg.file)) {
+          selectedFiles.push(msg.file);
+          renderSelectedFilePills();
+        }
+      }
+      // --- Copilot chat response handling ---
+      if (msg.type === 'chatPartial') {
+        removeThinkingText();
+        // Only update the last assistant message, do not push new ones
+        if (chatHistory.length === 0 || chatHistory[chatHistory.length - 1].role !== 'assistant') {
+          chatHistory.push({ role: 'assistant', content: msg.response });
+        } else {
+          chatHistory[chatHistory.length - 1].content += msg.response; // append only the new chunk
+        }
+        renderChat();
+      }
+      if (msg.type === 'chatResponse') {
+        removeThinkingText();
+        // Finalize assistant message (update last one)
+        if (chatHistory.length === 0 || chatHistory[chatHistory.length - 1].role !== 'assistant') {
+          chatHistory.push({ role: 'assistant', content: msg.response });
+        } else {
+          chatHistory[chatHistory.length - 1].content = msg.response;
+        }
+        setResponding(false);
+        renderChat();
+        if (msg.suggestions) {
+          renderSuggestions(msg.suggestions);
+        } else {
+          suggestionsDiv.innerHTML = '';
+        }
+      }
+      if (msg.type === 'chatStopped') {
+        removeThinkingText();
+        setResponding(false);
+      }
+    });
+
+    function renderChat() {
+      chat.innerHTML = chatHistory.map((m, idx) => {
+        if (m.role === 'assistant') {
+          let label = '<div style="font-weight:bold;color:var(--vscode-textLink-foreground);margin-bottom:0.2em;">Copilot</div>';
+          let contentHtml = '';
+          if (window.marked) {
+            contentHtml = window.marked.parse(m.content); // Use parse instead of parseInline
+          } else {
+            contentHtml = m.content.replace(/\n/g, '<br>');
+          }
+          // If this is the last assistant message and thinkingActive, append thinking text
+          if (thinkingActive && idx === chatHistory.length - 1) {
+            contentHtml += `<div style='display:flex;align-items:center;gap:0.5em;margin-top:0.5em;'>`
+              + `<span class='spinner-copilot'></span>`
+              + `<span id='thinking-text'>Thinking${'.'.repeat(thinkingDots)}</span>`
+              + `</div>`;
+          }
+          return `<div class="msg assistant"><div class="bubble">` +
+            label +
+            contentHtml +
+            `</div></div>`;
+        }
+        // User message with label
+        let userLabel = '<div style="font-weight:bold;color:var(--vscode-editor-foreground);margin-bottom:0.2em;">You</div>';
+        return `<div class="msg user"><div class="bubble">${userLabel}${m.content.replace(/\n/g, '<br>')}</div></div>`;
+      }).join('');
+      // If no assistant message yet, show thinking text in a new Copilot bubble
+      if (thinkingActive && (!chatHistory.length || chatHistory[chatHistory.length-1].role !== 'assistant')) {
+        chat.innerHTML += `<div class='msg assistant'><div class='bubble'>`
+          + `<div style='font-weight:bold;color:var(--vscode-textLink-foreground);margin-bottom:0.2em;'>Copilot</div>`
+          + `<div style='display:flex;align-items:center;gap:0.5em;'><span class='spinner-copilot'></span><span id='thinking-text'>Thinking${'.'.repeat(thinkingDots)}</span></div>`
+          + `</div></div>`;
+      }
+      chat.scrollTop = chat.scrollHeight;
+    }
+    function renderSuggestions(suggestions) {
+      if (!suggestions || !suggestions.length) {
+        suggestionsDiv.style.display = 'none';
+        suggestionsDiv.innerHTML = '';
+        return;
+      }
+      suggestionsDiv.style.display = '';
+      suggestionsDiv.innerHTML = suggestions.map((s, i) => `<div class="suggestion">${s.desc}<span class="approve" onclick="window.approveSuggestion(${i})">[Approve]</span></div>`).join('');
+      window.approveSuggestion = (idx) => {
+        vscode.postMessage({ type: 'approveSuggestion', suggestion: suggestions[idx] });
+      };
+    }
+    window.applyInlineCode = (b64code) => {
+      const code = atob(b64code);
+      vscode.postMessage({ type: 'applyInlineCode', code });
+    };
+    function escapeHtml(str) {
+      return str.replace(/[&<>"']'/g, function (tag) {
+        const charsToReplace = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+        return charsToReplace[tag] || tag;
+      });
+    }
+
+
+    // Sample suggestions fallback
+    const sampleSuggestions = [
+      'What is the capital of France?',
+      'How do I make an HTTP request in JavaScript?',
+      'Explain the concept of closure in JavaScript.',
+    ];
+
+    function showSuggestions(suggestions) {
+      suggestionsContainer.innerHTML = '';
+      suggestionsContainer.style.display = 'block';
+      (suggestions || sampleSuggestions).forEach((suggestion) => {
+        const div = document.createElement('div');
+        div.classList.add('suggestion');
+        div.textContent = typeof suggestion === 'string' ? suggestion : (suggestion.text || JSON.stringify(suggestion));
+        const approveBtn = document.createElement('span');
+        approveBtn.classList.add('approve');
+        approveBtn.textContent = 'Approve';
+        approveBtn.addEventListener('click', () => {
+          inputField.value = typeof suggestion === 'string' ? suggestion : (suggestion.text || '');
+          handleSend();
+        });
+        div.appendChild(approveBtn);
+        suggestionsContainer.appendChild(div);
+      });
+    }
+    // Show sample suggestions for demonstration
+    setTimeout(() => showSuggestions(), 2000);
+  </script>
+</body>
+
+</html>
